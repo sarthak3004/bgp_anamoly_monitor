@@ -2,17 +2,11 @@ import radix
 import csv
 import glob
 from mrtparse import Reader
+from constants import *
 
-MRT_FILE = "../data/updates.20231001.0000.bz2"
-ROA_FILE = "../data/roas/roas_*.csv"
-INVENTORY_FILE = "../data/inventory.csv"
-ALERTS_LOG = "../data/alerts.csv"
 
 def loadOperatorInventory(inventoryFilePath = INVENTORY_FILE):
-    """
-    Loads the operator prefix inventory into a Radix tree for Phase 1 checks.
-    Expected CSV columns: prefix, expected_asns, expected_max_len, category
-    """
+    #Loads the operator prefix inventory into a Radix tree for Phase 1 checks.
     inventoryTree = radix.Radix()
     with open(inventoryFilePath, 'r') as f:
         for row in csv.DictReader(f):
@@ -28,11 +22,9 @@ def loadOperatorInventory(inventoryFilePath = INVENTORY_FILE):
 
     return inventoryTree
 
-def loadGlobalRoa(file_patterns):
-    """
-    Loads all 5 regional time-aligned ROA CSVs into a single global Radix tree.
-    """
-    rtree = radix.Radix()
+def loadGlobalRoa(file_patterns = ROA_PATTERN):
+    #Loads all 5 regional time-aligned ROA CSVs into a single global Radix tree.
+    roaTree = radix.Radix()
     for csv_filepath in glob.glob(file_patterns):
         with open(csv_filepath, 'r') as f:
             for row in csv.DictReader(f):
@@ -40,13 +32,13 @@ def loadGlobalRoa(file_patterns):
                 asn = str(row['ASN']).replace('AS', '')
                 max_len = int(row['Max Length'])
 
-                node = rtree.search_exact(prefix) or rtree.add(prefix)
+                node = roaTree.search_exact(prefix) or roaTree.add(prefix)
                 node.data.setdefault('roas', []).append({'asn': asn, 'max_length': max_len})
 
-    return rtree
+    return roaTree
 
 def getBGPData(mrt_file = MRT_FILE):
-    print(f"[*] Opening compressed BGP feed: {mrt_file}")
+    print(f"Opening compressed BGP feed: {mrt_file}")
     for entry in Reader(mrt_file):
         data = entry.data
         if not data or 'BGP4MP' not in str(data.get('type', '')):
@@ -95,23 +87,21 @@ def getBGPData(mrt_file = MRT_FILE):
                 "prefix_length": length
             }
 
-def check_inventory(inv_tree, prefix_str, prefix_len, origin_asn):
+def checkInventory(inventoryTree, prefix_str, prefix_len, origin_asn):
     """
-    Phase 1: Checks if the announcement targets our owned Operator Prefix Inventory.
     Returns: (Status, Anomaly_Type, Evidence)
       - Status is 'EXTERNAL' if not in inventory (proceed to Phase 2).
       - Status is 'VALID_INTERNAL' or 'INVALID' if covered by inventory.
     """
     try:
-        covering_nodes = inv_tree.search_covering(prefix_str)
+        covering_nodes = inventoryTree.search_covering(prefix_str)
     except ValueError:
         return "INVALID", "MALFORMED_PREFIX", f"Malformed prefix or invalid masklen: {prefix_str}"
 
     if not covering_nodes:
         return "EXTERNAL", None, None
 
-    # Use the most specific covering inventory block
-    node = covering_nodes[-1]
+    node = covering_nodes[0] # Use the most specific covering inventory block
     expected_asns = node.data['expected_asns']
     expected_max_len = node.data['expected_max_len']
     category = node.data['category']
@@ -139,10 +129,10 @@ def check_inventory(inv_tree, prefix_str, prefix_len, origin_asn):
     )
 
 
-def validate_announcement(rtree, prefix_str, prefix_len, origin_asn):
+def checkRoa(rtree, prefix_str, prefix_len, origin_asn):
     """
     Phase 2: Evaluates an external BGP announcement against the global ROA Radix tree.
-    Returns: (Status, Anomaly_Type, Evidence)
+    Returns: (Status, Anomaly Type, Evidence)
     """
     try:
         covering_nodes = rtree.search_covering(prefix_str)
@@ -177,28 +167,24 @@ def validate_announcement(rtree, prefix_str, prefix_len, origin_asn):
     return "INVALID", invalid_type, invalid_reason
 
 
-def evaluate_update(inv_tree, roa_tree, ann):
+def evaluateAnnouncement(inventoryTree, roaTree, announcement):
     """
     Runs Phase 1 (Inventory) -> Phase 2 (Global ROA) on a single announcement.
     """
     # Phase 1: Operator Prefix Inventory
-    status, anomaly_type, evidence = check_inventory(
-        inv_tree, ann['prefix'], ann['prefix_length'], ann['origin_asn']
-    )
+    status, anamolyType, evidence = checkInventory(inventoryTree, announcement['prefix'], announcement['prefix_length'], announcement['origin_asn'])
     if status != "EXTERNAL":
-        return "PHASE_1_INVENTORY", status, anomaly_type, evidence
+        return "PHASE_1_INVENTORY", status, anamolyType, evidence
 
     # Phase 2: Global ROA Validation
-    status, anomaly_type, evidence = validate_announcement(
-        roa_tree, ann['prefix'], ann['prefix_length'], ann['origin_asn']
-    )
-    return "PHASE_2_ROA", status, anomaly_type, evidence
+    status, anamolyType, evidence = checkRoa(roaTree, announcement['prefix'], announcement['prefix_length'], announcement['origin_asn'])
+    return "PHASE_2_ROA", status, anamolyType, evidence
 
 
 if __name__ == "__main__":
-    print("[*] Loading operator inventory and global ROAs...")
+    print("Loading operator inventory and global ROAs...")
     inventoryTree = loadOperatorInventory(INVENTORY_FILE)
-    globalRoaTree = loadGlobalRoa(ROA_FILE)
+    globalRoaTree = loadGlobalRoa(ROA_PATTERN)
 
     phaseWiseCounts = {
         "PHASE_1_INVENTORY": {
@@ -217,8 +203,8 @@ if __name__ == "__main__":
     }
     alerts = []
 
-    for ann in getBGPData():
-        phase, status, anomaly_type, evidence = evaluate_update(inventoryTree, globalRoaTree, ann)
+    for announcement in getBGPData():
+        phase, status, anomaly_type, evidence = evaluateAnnouncement(inventoryTree, globalRoaTree, announcement)
 
         phaseWiseCounts[phase]["TOTAL"] += 1
         phaseWiseCounts[phase][status] += 1
@@ -228,11 +214,10 @@ if __name__ == "__main__":
                 phaseWiseCounts[phase]["ANOMALIES"].get(anomaly_type, 0) + 1
             )
             alerts.append([
-                ann['timestamp'], phase, anomaly_type,
-                ann['prefix'], ann['origin_asn'], evidence
+                announcement['timestamp'], phase, anomaly_type,
+                announcement['prefix'], announcement['origin_asn'], evidence
             ])
 
-    # Write explainable alerts to CSV
     with open(ALERTS_LOG, 'w', newline='') as f:
         writer = csv.writer(f)
         writer.writerow(["timestamp", "phase", "anomaly_type", "prefix", "origin_asn", "evidence"])
@@ -258,9 +243,3 @@ if __name__ == "__main__":
     for atype, cnt in p2["ANOMALIES"].items():
         print(f"    - {atype}: {cnt}")
     print(f"  UNKNOWN        : {p2['UNKNOWN']}")
-
-    print(f"\n[+] Saved {len(alerts)} explainable alerts to {ALERTS_LOG}")
-    if alerts:
-        print("\nSample Alerts:")
-        for row in alerts[:5]:
-            print(f"  [{row[1]}] {row[2]} | {row[3]} by AS{row[4]} -> {row[5]}")
