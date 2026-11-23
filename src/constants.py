@@ -1,6 +1,6 @@
 from pathlib import Path
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data_new"
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
 ALERTS_LOG = str(DATA_DIR / "alerts.csv")
 INVENTORY_FILE = str(DATA_DIR / "inventory.csv")
