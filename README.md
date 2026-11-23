@@ -9,7 +9,7 @@ Built in Python using `mrtparse` for streaming MRT decompression and C-backed `p
 
 Incoming BGP routing updates flow through a five-stage, dual-phase validation pipeline:
 
-![alt text](image-2.png)
+![alt text](image-3.png)
 
 ## Core Data Structures & Validation Design
 
@@ -43,6 +43,8 @@ Before adopting the C-backed Radix tree (`py-radix`) for the final pipeline, we 
 │   ├── alerts.csv
 │   └── synthetic_eval_results.csv
 ├── docs/
+│   ├── Project Report.pdf
+│   ├── 264101019_264101044_Project_Scope
 ├── src/
 │   ├── constants.py
 │   ├── generate_inventory.py
