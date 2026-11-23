@@ -9,7 +9,7 @@ Built in Python using `mrtparse` for streaming MRT decompression and C-backed `p
 
 Incoming BGP routing updates flow through a five-stage, dual-phase validation pipeline:
 
-![alt text](image-3.png)
+![alt text](image-2.png)
 
 ## Core Data Structures & Validation Design
 
